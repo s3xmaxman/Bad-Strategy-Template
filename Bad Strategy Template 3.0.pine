@@ -1,0 +1,1416 @@
+//@version=5
+SystemName = 'BST3.0'
+InitCapital = 10000
+InitPosition = 100.0
+InitCommission = 0.04
+InitPyramidMax = 1
+strategy(title=SystemName, shorttitle=SystemName, overlay=true, pyramiding=InitPyramidMax, initial_capital = InitCapital, default_qty_type=strategy.percent_of_equity, default_qty_value=InitPosition, commission_type=strategy.commission.percent, commission_value=InitCommission, precision=6, max_lines_count=500, max_labels_count=500,use_bar_magnifier = true)
+
+passphrase 				= input.string(defval='xxxx', title ='SECRET_KEY', group='═ Bot Setting ═' )
+leveragex  				= input.int(25,title='leverage', group='═ Bot Setting ═', minval=1)
+ticker                 = input.string(defval='BTCUSDTPERP', group='═ Bot Setting ═')
+
+//payload
+Alert_OpenLong      	= '{"side": "OpenLong", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
+Alert_OpenShort     	= '{"side": "OpenShort", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
+Alert_LongTP        	= '{"side": "CloseLong", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
+Alert_ShortTP       	= '{"side": "CloseShort", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
+Alert_Stoplong   		= '{"side": "CloseLong", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
+Alert_Stopshort  		= '{"side": "CloseShort", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
+
+CloseSession = input.bool(false, title='📅トレード時間を設定', group='Session')
+Session = input.session(title='トレードセッション', defval='0000-2345', group='Session')
+
+enable_long_strategy = input.bool(true, title='ロングを許可', group='Strategy')
+enable_short_strategy = input.bool(true, title='ショートを許可', group='Strategy')
+closeOnOpposite = input.bool(false, title='反対シグナルでクローズ', group='Strategy')
+
+// ————— Date range filtering
+set_close_time = input.bool(false,'📅任意の時間でクローズ' ,group = 'Date')
+cltime = input.int(23,title = '時間を指定',group='Date')
+cltime2 = input.int(00,title = '分を指定',group='Date')
+set_timelimit = input.bool(false,'📅ポジションの有効期限を設定' ,group = 'Date') 
+HOLD_long  = input.int(60, title='ロング保有期間(バー)',group = 'Date')
+HOLD_short = input.int(60, title='ショート保有期間(バー)',group = 'Date')
+// ————— Syntax coming from https://www.tradingview.com/blog/en/new-parameter-for-date-input-added-to-pine-21812/
+DateFilter = input.bool(false,'📅日付', group='Date')
+i_startTime = input.time(defval=timestamp('01 Jan 2000 13:30 +0000'), title='スタートタイム', group='Date')
+i_endTime = input.time(defval=timestamp('30 Dec 2077 23:30 +0000'), title='エンドタイム', group='Date')
+
+TradeDateIsAllowed() =>
+    DateFilter ? time >= i_startTime and time <= i_endTime : true
+
+// ————— Set the max losing streak length with an input
+setmaxLosingStreak = input.bool(title='最大連続損失取引回数を設定', defval=false, group='Risk Management')
+maxLosingStreak = input.int(title='最大連敗数', defval=15, minval=1, group='Risk Management')
+
+setmaxWinStreak = false//input.bool(title='連続勝利取引回数を設定', defval=false, group='Risk Management')
+maxWinStreak = 9999//input.int(title='最大連勝数', defval=9999, minval=1, group='Risk Management')
+
+// ————— Set the max consecutive days with a loss
+setmaxLosingDaysStreak = false//input.bool(title='最大連続損失日数を設定', defval=false, group='Risk Management')
+maxLosingDaysStreak = 3//input.int(title='連敗の最大日数', defval=3, minval=1, group='Risk Management')
+
+setMaxDrawdown = input.bool(title='最大ドローダウンを設定', defval=false, group='Risk Management')
+// ————— Input for the strategy's maximum drawdown (in % of strategy equity)
+maxPercDd = input.int(title='最大ドローダウン (%)', defval=10, minval=1, maxval=100, group='Risk Management')
+
+setMaxIntradayLoss = input.bool(title='1日の最大損失額を設定', defval=false, group='Risk Management')
+// ————— Input for the strategy's maximum intraday loss (in % of strategy equity)
+maxIntradayLoss = input.int(title='最大ドローダウン（1日%）', defval=3, minval=1, maxval=100, group='Risk Management')
+
+setNumberDailyTrades = false//input.bool(title='1日の取引回数を設定', defval=false, group='Risk Management')
+maxDailyTrades = 9999//input.int(title='1日の最大取引数', defval=10, minval=1, maxval=100, group='Risk Management')
+
+setNumberWeeklyTrades = false//input.bool(title='1週間の取引回数を設定', defval=false, group='Risk Management')
+maxWeeklyTrades = 9999//input.int(title='一週間の最大取引数', defval=50, minval=1, maxval=100, group='Risk Management')
+//filter inputs
+//Big Bull________________________________________________________________
+filterbigmovesbull =input.bool(false,"📈===ビックブル===", group="Entry Filters")
+filterbull_bar = input.int(3,'特定期間（ブル）' , group="Entry Filters")
+filterbigmovesvaluebull=input.float(3.0, title="ブルムーブ閾値%?", minval=0, maxval=100, step=0.1, group="Entry Filters")/100
+//Big Bear__________________________________________________________________
+filterbigmovesbear =input.bool(false,"📈===ビックベア===", group="Entry Filters")
+filterbear_bar = input.int(2,'特定期間（ベア）' , group="Entry Filters")
+filterbigmovesvaluebear=input.float(2, title="ベアムーブ閾値 %?", minval=0, maxval=100, step=0.1, group="Entry Filters")/100
+//doubledipping________________________________________________________________
+nodoubledipping = input.bool(false,"📈===再エントリー（N本)===", group="Entry Filters")
+dip = input.int(6,"再エントリーのクールタイム",group = "Entry Filters")
+//MA #1____________________________________________________________________________________________________________________
+uselongemafilter_1 = input.bool(false, "📈===MA#1の上にあるロングエントリー===", group="Entry Filters" ,inline = "MA#1")
+useshortemafilter_1 = input.bool(false, "📈===MA#1の下にあるショートエントリー===", group="Entry Filters",inline = "MA#1")
+mavalue_1 = input.int(21 , "MA period #1", group="Entry Filters",inline = "MA#1") 
+typeMA_1 = input.string(title = "MA#1の種類", defval = "SMA", options=["SMA", "EMA", "SMMA (RMA)","WMA","VWMA","DEMA","HMA","T3","GMA","KAMA","VIDYA","Karobein","ELF","SW-MA","TRAMA","McGinley","LSMA","Kijun"],  group="Entry Filters" ,inline = "MA#1")
+MA_EX_type1 = input.string(title = "MA#1",defval = "Close", options = ["MA#1","MA#2","MA#3","Close","High","Low","Open"],group="Entry Filters" ,inline = "MA#1")
+distancetoma1=input.float(0.0, title="MA#1バッファ(%)", minval=-1, maxval=1, step=0.001, group="Entry Filters",inline = "MA#1")
+//MA #2____________________________________________________________________________________________________________________
+uselongemafilter_2 = input.bool(false, "📈===MA#2の上にあるロングエントリー===", group="Entry Filters" ,inline = "MA#2")
+useshortemafilter_2 = input.bool(false, "📈===MA#2の下にあるショートエントリー===", group="Entry Filters",inline = "MA#2")
+mavalue_2 = input.int(55 , "MA period #2", group="Entry Filters",inline = "MA#2") 
+typeMA_2 = input.string(title = "MA#2の種類", defval = "SMA", options=["SMA", "EMA", "SMMA (RMA)","WMA","VWMA","DEMA","HMA","T3","GMA","KAMA","VIDYA","Karobein","ELF","SW-MA","TRAMA","McGinley","LSMA","Kijun"], group="Entry Filters" ,inline = "MA#2")
+MA_EX_type2 = input.string(title = "MA#2",defval = "Close", options = ["MA#1","MA#2","MA#3","Close","High","Low","Open"],group="Entry Filters" ,inline = "MA#2")
+distancetoma2=input.float(0.0, title="MA#2バッファ(%)", minval=-1, maxval=1, step=0.001, group="Entry Filters",inline = "MA#2")
+//MA #3____________________________________________________________________________________________________________________
+uselongemafilter_3 = input.bool(false, "📈===MA#3の上にあるロングエントリー===", group="Entry Filters" ,inline = "MA#3")
+useshortemafilter_3 = input.bool(false, "📈===MA#3の下にあるショートエントリー===", group="Entry Filters",inline = "MA#3")
+mavalue_3 = input.int(200 , "MA period #3", group="Entry Filters",inline = "MA#3") 
+typeMA_3 = input.string(title = "MA#3の種類", defval = "SMA", options=["SMA", "EMA", "SMMA (RMA)","WMA","VWMA","DEMA","HMA","T3","GMA","KAMA","VIDYA","Karobein","ELF","SW-MA","TRAMA","McGinley","LSMA","Kijun"], group="Entry Filters" ,inline = "MA#3")
+MA_EX_type3 = input.string(title = "MA#3",defval = "Close", options = ["MA#1","MA#2","MA#3","Close","High","Low","Open"],group="Entry Filters" ,inline = "MA#3")
+distancetoma3=input.float(0.0, title="MA#3バッファ(%)", minval=-1, maxval=1, step=0.001, group="Entry Filters",inline = "MA#3")
+//Average Directional Index___________________________________________
+filteradx = input.bool(false,"📈===ADX===" ,group='Entry Filters' )
+ADX_len = input.int(title='ADX Length', defval=14, group="Entry Filters")
+ADX_th = input.int(title='ADX Threshold', defval=20, group="Entry Filters")
+typeMA2 = input.string(title = "MAの種類(ADX)", defval = "SMA", options=["SMA", "EMA", "SMMA (RMA)","WMA","VWMA","DEMA","HMA","T3","GMA","KAMA","VIDYA","Karobein","ELF","SW-MA","TRAMA","McGinley","LSMA","Kijun"],  group="Entry Filters")
+DI_int = input.int(40,title = "DI Cross Point",group="Entry Filters" )
+iADXSlope = input.float(3.5, minval=0, maxval=300, title='ADX Slope', step=0.5, group="Entry Filters")
+typeADX = input.string(title = "ADXの種類", defval = "ADX", options=["ADX","DI Cross","ADX Slope"], group="Entry Filters")
+//Range Flow Index_________________________________________________
+filter_RF = input.bool(false,'📈===RF===', group = 'Entry Filters')
+RF_src = input.source(close, group = 'Entry Filters')
+per = input.int(defval=50, minval=1, title='Sampling Period', group ='Entry Filters')
+mult = input.float(defval=3.0, minval=0.1, title='Range Multiplier', group ='Entry Filters')
+//Volume Flow Index__________________________________________________________________
+filter_VFI = input.bool(false,'📈===VFI===', group = 'Entry Filters')
+VFIlength = input.int(130, title='VFI length',group ='Entry Filters')
+coef = input.float(0.2, step = 0.1 ,group ='Entry Filters')
+vcoef = input.float(2.5, title='Max. vol. cutoff', group ='Entry Filters')
+signalLength = input.int(5, group ='Entry Filters')
+smoothVFI = input.bool(false, group ='Entry Filters')
+//BullBearPower______________________________________________________________________
+filter_BBP = input.bool(false ,"📈===BBP===" ,group ='Entry Filters' )
+lengthInput = input.int(13, title="Length",group ='Entry Filters')
+//Trend Direction Force Index______________________________________________________________
+filter_TDFI = input.bool(false, title="📈===TDFI===",group ='Entry Filters')
+lookback = input.int(13, title='Lookback',group ='Entry Filters')
+mmaLength = input.int(9, title='MMA Length',group ='Entry Filters')
+mmaMode = input.string(title = "MAの種類(TDFI1)", defval = "SMA", options=["SMA", "EMA", "SMMA (RMA)","WMA","VWMA","DEMA","HMA","T3","GMA","KAMA","VIDYA","Karobein","ELF","SW-MA","TRAMA","McGinley","LSMA","Kijun"], group='Entry Filters')
+smmaLength = input.int(21,group ='Entry Filters')
+smmaMode =  input.string(title = "MAの種類(TDFI2)", defval = "SMA", options=["SMA", "EMA", "SMMA (RMA)","WMA","VWMA","DEMA","HMA","T3","GMA","KAMA","VIDYA","Karobein","ELF","SW-MA","TRAMA","McGinley","LSMA","Kijun"], group='Entry Filters')
+nLength = 3//input.int(3, title='N Length',group ='Entry Filters')s"
+filterHigh = input.float(0.05,step = 0.01, title='Filter High',group ='Entry Filters')
+filterLow = input.float(-0.05,step = 0.01, title='Filter Low',group ='Entry Filters')
+//Trend Magic______________________________________________________________________________
+filter_magictrend = input.bool(false,title = "📈===MagicTrend===", group='Entry Filters' )
+_period = input(20, 'CCI period', group='Entry Filters')
+_coeff = input(1, 'ATR Multiplier', group='Entry Filters')
+_AP = input(5, 'ATR Period', group='Entry Filters')
+//Braid filter_______________________________________________________________________________
+filter_braid = input.bool(false,title = "📈===Braid filter===", group='Entry Filters')
+braid_filter_maType = input.string('EMA', 'MA Type', options=["SMA", "EMA", "SMMA (RMA)","WMA","VWMA","DEMA","HMA","T3","GMA","KAMA","VIDYA","Karobein","ELF","SW-MA","TRAMA","McGinley","LSMA","Kijun"], group='Entry Filters')
+Period1 = input(3, 'Period 1', group='Entry Filters')
+Period2 = input(7, 'Period 2', group='Entry Filters')
+Period3 = input(14, 'Period 3', group='Entry Filters')
+PipsMinSepPercent = input(40, group='Entry Filters')
+//Range Identifier_______________________________________________________________________________
+filter_range_I = input.bool(false,title = "📈===Range Identifier===", group='Entry Filters')
+i_maSource = input(close, 'Source',group='Entry Filters')
+i_maType = input.string('WMA', 'MA Type', options=["SMA", "EMA", "SMMA (RMA)","WMA","VWMA","DEMA","HMA","T3","GMA","KAMA","VIDYA","Karobein","ELF","SW-MA","TRAMA","McGinley","LSMA","Kijun"],group='Entry Filters')
+i_maLen1 = input(3, 'MA Fast Length',group='Entry Filters')
+i_maLen2 = input(24, 'MA Slow Length',group='Entry Filters')
+i_atrLen1 = input(3, 'ATR Period 1',group='Entry Filters')
+i_atrLen2 = input(24, 'ATR Period 2',group='Entry Filters')
+i_custom = input.float(0.1, 'Custom Treshold', minval=0.001,group='Entry Filters')
+//Super Trend____________________________________________________________________________________
+filter_supertrend = input.bool(false,title = "📈===Super Trend===", group='Entry Filters')
+suplength = input.int(defval=8, title='ATR Period(ST)', group='Entry Filters')
+supmult = input.float( defval=1.8, title='ATR Multiplier(ST)', step=0.1, group ='Entry Filters' )
+//Day Of Week filter L___________________________________________________________________________
+Monday = input.bool(true, "月曜", group="Long Days of the week Entry Filters",inline = "week")
+Tuesday = input.bool(true, "火曜", group="Long Days of the week Entry Filters",inline = "week")
+Wednesday = input.bool(true, "水曜", group="Long Days of the week Entry Filters",inline = "week")
+Thursday = input.bool(true, "木曜", group="Long Days of the week Entry Filters",inline = "week")
+Friday = input.bool(true, "金曜", group="Long Days of the week Entry Filters",inline = "week")
+Saturday=input.bool(false, "土曜", group="Long Days of the week Entry Filters",inline = "week")
+Sunday=input.bool(false, "日曜", group="Long Days of the week Entry Filters",inline = "week")
+// Day Of Week filter S___________________________________________________________________________
+Monday_S = input.bool(true, "月曜", group="Short Days of the week Entry Filters",inline = "week_S")
+Tuesday_S = input.bool(true, "火曜", group="Short Days of the week Entry Filters",inline = "week_S")
+Wednesday_S = input.bool(true, "水曜", group="Short Days of the week Entry Filters",inline = "week_S")
+Thursday_S = input.bool(true, "木曜", group="Short Days of the week Entry Filters",inline = "week_S")
+Friday_S = input.bool(true, "金曜", group="Short Days of the week Entry Filters",inline = "week_S")
+Saturday_S=input.bool(false, "土曜", group="Short Days of the week Entry Filters",inline = "week_S")
+Sunday_S=input.bool(false, "日曜", group="Short Days of the week Entry Filters",inline = "week_S")
+
+//API messages
+//apienterlongmessage = input.text_area(title='API Enter Long message', defval='ロングメッセージを入力してください。ボットプロバイダーへのストラテジーアラートには {{strategy.order.alert_message}} を使用します', group="API messages")
+//apiexitlongmessage = input.text_area(title='API Exit Long message', defval='Exit Long message', group="API messages")
+//apientershortmessage = input.text_area(title='API Enter Short message', defval='Enter Short message', group="API messages")
+//apiexitshortmessage = input.text_area(title='API Exit Short message', defval='Exit Short message', group="API messages")
+
+// ————— Stop loss management
+StopType = input.string(title='❌StopLoss Type', defval='ATR', options=['None', 'Percent', 'ATR', 'ATR Trailing'], inline = "StopType", group = "StopLoss")
+// ————— Percent
+LossPerc = input.float(title=' Stop loss(%)', minval=0.0, step=0.1, defval=1.8, inline ="LOSS", group = "StopLoss") * 0.01
+// ————— ATR
+atrStopLength = input.int(title='ATR Length', defval=14, inline ="ATR", group = "StopLoss")
+riskRatioATR = input.float(defval=2.0, title='ATR Mult', step=0.10, inline ="ATR", group = "StopLoss")
+// ————— ATR Traling
+atr_t_len   = input.int(14, minval=1,title='Trailing Length', inline="inputsATR", group = "StopLoss")
+atr_t_mult  = input.float(1.5,title='Trailing Mult', step = 0.1, inline="inputsATR", group = "StopLoss")
+// ————— Require Close Below Stop Loss
+close_stop = input.bool(false, "Require Close Below Stop Loss", inline = "equire Close Below Stop Loss", group = "StopLoss"), es_perc = input.float(0.3, step = 0.1, minval=0.0, title = "equire Close Below Stop Loss", group = "StopLoss") * 0.01
+
+
+
+
+// ————— Percent
+TakeProfitType = input.string(title='✅Profit Type', defval='RR', options=['None', 'Percent', 'RR','ATR'], inline = "TakeProfitType", group = "TakeProfit")
+LProfitPerc1 = input.float(title='TP%(long)', minval=0.0, step=0.1, defval=1.5, inline = "TP", group = "TakeProfit") * 0.01
+SProfitPerc1 = input.float(title='TP%(short)', minval=0.0, step=0.1, defval=1.5, inline = "TP", group = "TakeProfit") * 0.01
+LratioTP = input.float(title="RR 1:(long", step=0.1 , defval=1.5, minval = 0, inline = "RR", group = "TakeProfit")
+SratioTP = input.float(title="RR 1:(short)", step=0.1 , defval=1.5, minval = 0,inline = "RR", group = "TakeProfit")
+_atrLength = input.int(defval = 14, title = 'ATR Length', minval = 1, inline = 'Take Profit ATR Multiplier', group = "TakeProfit")
+longTakeProfitAtrMul = input.float(defval = 2.0, title = 'L_Mult', minval = 0.1, step = 0.1, inline = 'Take Profit ATR Multiplier', group = "TakeProfit")
+shortTakeProfitAtrMul = input.float(defval = 2.0, title = 'S_Mult', minval = 0.1, step = 0.1, inline = 'Take Profit ATR Multiplier', group = "TakeProfit")
+
+// Take Profit Settings
+Ttp = false//input.bool(false,title = 'MultiTP X2')
+set_multi_tp = input.string( title='MultiTP Type' , defval='Percent' , options=['Percent','RR'])
+tp1 = input.float(2.0, "1TP Level (%)", step = 0.1, inline='4 tp') / 100
+tp1Amount = input.int(50, "Amount (%)", step = 1, inline='4 tp')
+tp2 = input.float(5.0, "2TP Level (%)", step = 0.1, inline='4 tp') / 100
+//RR base multitp
+tp1_rr = input.float(1.1, "1TP Level (RR)", step = 0.1, inline='rr 4 tp')
+tp1_rrAmount = input.int(50, "Amount (%)", step = 1, inline='rr 4 tp')
+tp2_rr = input.float(1.2, "2TP Level (RR)", step = 0.1, inline='rr 4 tp') 
+//Trailing Entry
+entryOrderType = input.string(defval = 'MARKET', title = 'Order Type', options = ['MARKET', 'LIMIT'], tooltip = 'Use market order to enter at the open of the next bar (MARKET), or use limit order to enter at a "better" price defined by the distance from the close price and the limit mode (LIMIT), or use stop-limit order to enter at a "worst" price defeined by the distance from the close price and the limit mode (STOP-LIMIT). Limit and stop-limit orders last until they are filled or canceled.', group = 'Trailing Entry')
+entryLimitMode = 'TRAIL'//input.string(defval = 'TRAIL', title = 'Limit Mode', options = ['FIXED', 'TRAIL'], tooltip = 'When you use limit or stop-limit orders to enter, use a fixed price defined by the distance and the close price when the open signal occured (FIXED), or trail by following the price to the direction of the entry for limit orders or the other direction of the entry for stop-limit orders (TRAIL).', group = 'Trailing Entry')
+entryType_Method = input.string(defval = 'PERC' ,title = 'Entry method' , options = ['PERC','ATR'], group = 'Trailing Entry')
+distEntryPerc = input.float(defval = 3.0, title = 'Distance PERC', minval = 0.01, maxval = 100, step = 0.05, tooltip = 'The distance from the close price when the open position condition is met and the distance to keep from the high/low price when trailing.', group = 'Trailing Entry') / 100
+deviationAtrMul2 = input.float(defval = 1.0, title = 'Distance ATR', minval = 0.01, step = 0.05, group = 'Trailing Entry')
+
+BIG_NUMBER_COUNT = 1000
+//-----------------------------------------technical filter------------------------------------------------------------
+//GMA - Geometric Moving Average
+gma(float src, int len) =>    
+    var float result = 0.0      
+    sum = src
+    for i = 1 to len - 1 by 1
+        sum *= src[i]
+        sum
+    result := math.pow(sum, 1 / len)
+    result
+//T3
+T3(float src, int len) =>
+    var float result = 0.0   
+    xPrice = close
+    xe1 = ta.ema(xPrice,len)
+    xe2 = ta.ema(xe1,len)
+    xe3 = ta.ema(xe2,len)
+    xe4 = ta.ema(xe3,len)
+    xe5 = ta.ema(xe4,len)
+    xe6 = ta.ema(xe5,len)
+    b = 0.7
+    c1 = -b * b * b
+    c2 = 3 * b * b + 3 * b * b * b
+    c3 = -6 * b * b - 3 * b - 3 * b * b * b
+    c4 = 1 + 3 * b + b * b * b + 3 * b * b
+    result := c1 * xe6 + c2 * xe5 + c3 * xe4 + c4 * xe3
+    result
+// Karobein
+Karobein(float _src, int _len) =>
+    tmpMA = ta.ema(_src, _len)
+    tmpUpper  = ta.ema(tmpMA < tmpMA[1] ? tmpMA/tmpMA[1] : 0, _len)
+    tmpLower  = ta.ema(tmpMA > tmpMA[1] ? tmpMA/tmpMA[1] : 0, _len)
+    tmpRescaleResult  = (tmpMA/tmpMA[1]) / (tmpMA/tmpMA[1] + tmpLower)
+    (2*((tmpMA/tmpMA[1]) / (tmpMA/tmpMA[1] + tmpRescaleResult * tmpUpper)) - 1) * 100
+// Kaufman's Adaptive Moving Average (KAMA)
+KAMA(float _src, int _len) =>
+    tmpVal = 0.0
+    sum_1 = math.sum(math.abs(_src - _src[1]), _len)
+    sum_2 = math.sum(math.abs(_src - _src[1]), _len)
+    tmpVal := nz(tmpVal[1]) + math.pow((sum_1 != 0 ? math.abs(_src - _src[_len]) / sum_2 : 0) * (0.666 - 0.0645) + 0.0645, 2) * (_src - nz(tmpVal[1]))
+    return_5 = tmpVal
+    return_5
+// Variable Index Dynamic Average (VIDYA)
+VIDYA(float _src, int _len) =>
+    _diff = ta.change(_src)
+    _uppperSum = math.sum(_diff > 0 ? math.abs(_diff) : 0, _len)
+    _lowerSum = math.sum(_diff < 0 ? math.abs(_diff) : 0, _len)
+    _chandeMomentumOscillator = (_uppperSum - _lowerSum) / (_uppperSum + _lowerSum)
+    _factor = 2 / (_len + 1)
+    tmpVal = 0.0
+    tmpVal := _src * _factor * math.abs(_chandeMomentumOscillator) + nz(tmpVal[1]) * (1 - _factor * math.abs(_chandeMomentumOscillator))
+    return_6 = tmpVal
+    return_6
+elf(float src, int len) =>    //   ELF - Ehler's Laguerre filter
+    var float result = 0.0     
+    y = float(na)
+    alpha = math.exp((1 - len) / 20)  // map length to alpha
+    L0 = 0.0
+    L0 := alpha * src + (1 - alpha) * nz(L0[1])
+    L1 = 0.0
+    L1 := -(1 - alpha) * L0 + nz(L0[1]) + (1 - alpha) * nz(L1[1])
+    L2 = 0.0
+    L2 := -(1 - alpha) * L1 + nz(L1[1]) + (1 - alpha) * nz(L2[1])
+    L3 = 0.0
+    L3 := -(1 - alpha) * L2 + nz(L2[1]) + (1 - alpha) * nz(L3[1])
+    y := (L0 + 2 * L1 + 2 * L2 + L3) / 6
+    result := y
+    result
+sw_ma(float src, int len) =>    // Sine-Weighted Moving Average (SW-MA)
+    var float result = 0.0
+    PI_ = 2 * math.asin(1)
+    sum = 0.0
+    weightSum = 0.0
+    for i = 0 to len - 1 by 1
+        weight = math.sin((i + 1) * PI_ / (len + 1))
+        sum += nz(src[i]) * weight
+        weightSum += weight
+        weightSum
+    result := sum / weightSum
+    result
+trama(float src ,  int length) =>  //Trend Regularity Adaptive Moving Average
+    var float ama = 0.0
+    hh = math.max(math.sign(ta.change(ta.highest(length))), 0)
+    ll = math.max(math.sign(ta.change(ta.lowest(length)) * -1), 0)
+    tc = math.pow(ta.sma(hh or ll ? 1 : 0, length), 2)
+    ama := nz(ama[1] + tc * (src - ama[1]), src)
+    ama
+Mc(float src , int length) => 
+    var float mg = 0.0
+    mg := na(mg[1]) ? ta.ema(src, length) : mg[1] + (src - mg[1]) / (length * math.pow(src / mg[1], 4))
+    mg
+lsma(float src , int len)  =>    // Least Squares
+    var float result = 0.0
+    result := ta.linreg(src, len, 0)
+    result
+kj(float src , int len)  => 
+    var float result = 0.0
+    kijun = math.avg(ta.lowest(len), ta.highest(len))
+    result := kijun
+    result   
+//ma
+
+ma(source, length, type) =>
+    type == "SMA" ? ta.sma(close, length) :
+     type == "EMA" ? ta.ema(close, length) :
+     type == "SMMA (RMA)" ? ta.rma(close, length) :
+     type == "WMA" ? ta.wma(close, length) :
+     type == "VWMA" ? ta.vwma(close, length) :
+     type == "DEMA" ? 2 * ta.ema(close,length) - ta.ema(ta.ema(close,length),length) :
+     type == "HMA" ? ta.hma(close,length):
+     type == "T3" ? T3(close,length) : 
+     type == "GMA" ? gma(close,length) :
+     type == "KAMA" ? KAMA(close,length) :
+     type == "VIDYA" ? VIDYA(close, length) :
+     type == "Karobein" ? Karobein(close,length) :
+     type == "ELF" ? elf(close,length) :
+     type == "SW-MA"? sw_ma(close,length) :
+     type == "TRAMA" ? trama(close,length) :
+     type == "McGinley" ? Mc(close,length) :
+     type == "LSMA"  ? lsma(close,length) :
+     type == "Kijun" ? kj(close,length) :
+     na
+
+
+//ADX
+TrueRange = math.max(math.max(high - low, math.abs(high - nz(close[1]))), math.abs(low - nz(close[1])))
+DirectionalMovementPlus = high - nz(high[1]) > nz(low[1]) - low ? math.max(high - nz(high[1]), 0) : 0
+DirectionalMovementMinus = nz(low[1]) - low > high - nz(high[1]) ? math.max(nz(low[1]) - low, 0) : 0
+
+
+SmoothedTrueRange = 0.0
+SmoothedTrueRange := nz(SmoothedTrueRange[1]) - nz(SmoothedTrueRange[1]) / ADX_len + TrueRange
+SmoothedDirectionalMovementPlus = 0.0
+SmoothedDirectionalMovementPlus := nz(SmoothedDirectionalMovementPlus[1]) - nz(SmoothedDirectionalMovementPlus[1]) / ADX_len + DirectionalMovementPlus
+SmoothedDirectionalMovementMinus = 0.0
+SmoothedDirectionalMovementMinus := nz(SmoothedDirectionalMovementMinus[1]) - nz(SmoothedDirectionalMovementMinus[1]) / ADX_len + DirectionalMovementMinus
+
+DIPlus = SmoothedDirectionalMovementPlus / SmoothedTrueRange * 100
+DIMinus = SmoothedDirectionalMovementMinus / SmoothedTrueRange * 100
+DX = math.abs(DIPlus - DIMinus) / (DIPlus + DIMinus) * 100
+ADX = typeMA2 == "SMA" ? ta.sma(DX,ADX_len) :
+     typeMA2 == "EMA" ? ta.ema(DX,ADX_len) :
+     typeMA2 == "SMMA (RMA)" ? ta.rma(DX,ADX_len) :
+     typeMA2 == "WMA" ? ta.wma(DX,ADX_len) :
+     typeMA2 == "VWMA" ? ta.vwma(DX,ADX_len) :
+     typeMA2 == "DEMA" ? 2 * ta.ema(DX,ADX_len) - ta.ema(ta.ema(DX,ADX_len),ADX_len) :
+     typeMA2 == "HMA" ? ta.hma(DX,ADX_len) :
+     typeMA2 == "T3" ? T3(DX,ADX_len) : 
+     typeMA2 == "GMA" ? gma(DX,ADX_len) :
+     typeMA2 == "KAMA" ? KAMA(DX,ADX_len) :
+     typeMA2 == "VIDYA" ? VIDYA(DX,ADX_len) :
+     typeMA2 == "Karobein" ? Karobein(DX,ADX_len) :
+     typeMA2 == "ELF" ? elf(DX,ADX_len) :
+     typeMA2 == "SW-MA"? sw_ma(DX,ADX_len) :
+     typeMA2 == "TRAMA" ? trama(DX,ADX_len) :
+     typeMA2 == "McGinley" ? Mc(DX,ADX_len) :
+     typeMA2 == "LSMA"  ? lsma(DX,ADX_len) :
+     typeMA2 == "Kijun" ? kj(DX,ADX_len) :
+     na
+set_ADX1 =  ADX > ADX_th 
+set_ADX_SELL = typeADX == "ADX" ? set_ADX1 : typeADX == "DI Cross" ? DIMinus >= DI_int : typeADX == "ADX Slope" ? set_ADX1 and (ADX[2] + iADXSlope < ADX[1]) and (ADX[1] + iADXSlope < ADX) : na 
+set_ADX_BUY =  typeADX == "ADX" ? set_ADX1 : typeADX == "DI Cross" ? DIPlus  >= DI_int : typeADX == "ADX Slope" ? set_ADX1 and (ADX[2] + iADXSlope < ADX[1]) and (ADX[1] + iADXSlope < ADX) : na
+
+
+                                    
+// Smooth Average Range
+smoothrng(x, t, m) =>
+    wper = t * 2 - 1
+    avrng = ta.ema(math.abs(x - x[1]), t)
+    smoothrng = ta.ema(avrng, wper) * m
+    smoothrng
+smrng = smoothrng(RF_src, per, mult)
+
+// Range Filter
+
+rngfilt(x, r) =>
+    rngfilt = x
+    rngfilt := x > nz(rngfilt[1]) ? x - r < nz(rngfilt[1]) ? nz(rngfilt[1]) : x - r : x + r > nz(rngfilt[1]) ? nz(rngfilt[1]) : x + r
+    rngfilt
+filt = rngfilt(RF_src, smrng)
+
+// Filter Direction
+
+upward = 0.0
+upward := filt > filt[1] ? nz(upward[1]) + 1 : filt < filt[1] ? 0 : nz(upward[1])
+downward = 0.0
+downward := filt < filt[1] ? nz(downward[1]) + 1 : filt > filt[1] ? 0 : nz(downward[1])
+
+// Target Bands
+
+hband = filt + smrng
+lband = filt - smrng
+
+// Break Outs 
+
+longCond = bool(na)
+shortCond = bool(na)
+longCond := RF_src > filt and RF_src > RF_src[1] and upward > 0 or RF_src > filt and RF_src < RF_src[1] and upward > 0
+shortCond := RF_src < filt and RF_src < RF_src[1] and downward > 0 or RF_src < filt and RF_src > RF_src[1] and downward > 0
+
+CondIni = 0
+CondIni := longCond ? 1 : shortCond ? -1 : CondIni[1]
+long_RF = longCond //and CondIni[1] == -1
+short_RF = shortCond //and CondIni[1] == 1
+
+//  VFI filter
+FIma(x, y) =>
+    sma_1 = ta.sma(x, y)
+    smoothVFI ? sma_1 : x
+
+typical = hlc3
+inter = math.log(typical) - math.log(typical[1])
+vinter = ta.stdev(inter, 30)
+cutoff = coef * vinter * close
+vave = ta.sma(volume, VFIlength)[1]
+vmax = vave * vcoef
+vc = volume < vmax ? volume : vmax  //min( volume, vmax )
+mf = typical - typical[1]
+iff_01 = mf < -cutoff ? -vc : 0
+vcp = mf > cutoff ? vc : iff_01
+
+vfi = FIma(math.sum(vcp, VFIlength) / vave, 3)
+vfima = ta.ema(vfi, signalLength)
+vfi_d = vfi - vfima
+
+vfi_long = vfi > 0 and vfi_d > 0
+vfi_short = vfi < 0 and vfi_d < 0
+
+//BBP
+bullPower = high - ta.ema(close, lengthInput)
+bearPower = low - ta.ema(close, lengthInput)
+BBP =  bullPower + bearPower
+BBP_long =  BBP > 0
+BBP_short = BBP < 0
+
+//MA EX
+MA_EX1 = (ma(close,mavalue_1,typeMA_1)*(1+distancetoma1))
+MA_EX2 = (ma(close,mavalue_2,typeMA_2)*(1+distancetoma2)) 
+MA_EX3 = (ma(close,mavalue_3,typeMA_3)*(1+distancetoma3))
+
+MA_EX_type_final1 = MA_EX_type1 == "MA#1" ? MA_EX1 : MA_EX_type1 == "MA#2" ? MA_EX2 : MA_EX_type1 == "MA#3" ? MA_EX3 : MA_EX_type1 == "Close" ? close  : MA_EX_type1 == "High" ? high : MA_EX_type1 == "Low" ? low : MA_EX_type1 == "Open" ? open :  na
+MA_EX_type_final2 = MA_EX_type2 == "MA#1" ? MA_EX1 : MA_EX_type2 == "MA#2" ? MA_EX2 : MA_EX_type2 == "MA#3" ? MA_EX3 : MA_EX_type2 == "Close" ? close  : MA_EX_type2 == "High" ? high : MA_EX_type2 == "Low" ? low : MA_EX_type2 == "Open" ? open :  na
+MA_EX_type_final3 = MA_EX_type3 == "MA#1" ? MA_EX1 : MA_EX_type3 == "MA#2" ? MA_EX2 : MA_EX_type3 == "MA#3" ? MA_EX3 : MA_EX_type3 == "Close" ? close  : MA_EX_type3 == "High" ? high : MA_EX_type3 == "Low" ? low : MA_EX_type3 == "Open" ? open :  na
+
+//TDFI
+mma(mode, src, len) =>
+    mode == "SMA" ? ta.sma(close, len) :
+     mode == "EMA" ? ta.ema(close, len) :
+     mode == "SMMA (RMA)" ? ta.rma(close, len) :
+     mode == "WMA" ? ta.wma(close, len) :
+     mode == "VWMA" ? ta.vwma(close, len) :
+     mode == "DEMA" ? 2 * ta.ema(close,len) - ta.ema(ta.ema(close,len),len) :
+     mode == "HMA" ? ta.hma(close,len):
+     mode == "T3" ? T3(close,len) : 
+     mode == "GMA" ? gma(close,len) :
+     mode == "KAMA" ? KAMA(close,len) :
+     mode == "VIDYA" ? VIDYA(close, len) :
+     mode == "Karobein" ? Karobein(close,len) :
+     mode == "ELF" ? elf(close,len) :
+     mode == "SW-MA"? sw_ma(close,len) :
+     mode == "TRAMA" ? trama(close,len) :
+     mode == "McGinley" ? Mc(close,len) :
+     mode == "LSMA"  ? lsma(close,len) :
+     mode == "Kijun" ? kj(close,len) :
+     na
+
+tdfi() =>
+    mma = mma(mmaMode, close * 1000, mmaLength)
+    smma = mma(smmaMode, mma, smmaLength)
+    impetmma = mma - mma[1]
+    impetsmma = smma - smma[1]
+    divma = math.abs(mma - smma)
+    averimpet = (impetmma + impetsmma) / 2
+    tdf = math.pow(divma, 1) * math.pow(averimpet, nLength)
+    tdf / ta.highest(math.abs(tdf), lookback * nLength)
+
+signal = tdfi()
+
+TDFI_L = signal > filterHigh
+TDFI_S = signal < filterLow
+
+//Trend Magic 
+ATR_tm = ta.sma(ta.tr, _AP)
+src_tm = close
+upT = low - ATR_tm * _coeff
+downT = high + ATR_tm * _coeff
+MagicTrend = 0.0
+MagicTrend := ta.cci(src_tm, _period) >= 0 ? upT < nz(MagicTrend[1]) ? nz(MagicTrend[1]) : upT : downT > nz(MagicTrend[1]) ? nz(MagicTrend[1]) : downT
+L_magic = ta.cci(src_tm, _period) >= 0
+S_magic = ta.cci(src_tm, _period) <= 0
+
+//Braid filter 
+//-- Moving Average
+bma(mode, src, len) =>
+     mode == "SMA" ? ta.sma(close, len) :
+     mode == "EMA" ? ta.ema(close, len) :
+     mode == "SMMA (RMA)" ? ta.rma(close, len) :
+     mode == "WMA" ? ta.wma(close, len) :
+     mode == "VWMA" ? ta.vwma(close, len) :
+     mode == "DEMA" ? 2 * ta.ema(close,len) - ta.ema(ta.ema(close,len),len) :
+     mode == "HMA" ? ta.hma(close,len):
+     mode == "T3" ? T3(close,len) : 
+     mode == "GMA" ? gma(close,len) :
+     mode == "KAMA" ? KAMA(close,len) :
+     mode == "VIDYA" ? VIDYA(close, len) :
+     mode == "Karobein" ? Karobein(close,len) :
+     mode == "ELF" ? elf(close,len) :
+     mode == "SW-MA"? sw_ma(close,len) :
+     mode == "TRAMA" ? trama(close,len) :
+     mode == "McGinley" ? Mc(close,len) :
+     mode == "LSMA"  ? lsma(close,len) :
+     mode == "Kijun" ? kj(close,len) :
+     na
+
+//-- Braid Filter   
+ma01 = bma(braid_filter_maType, close, Period1)
+ma02 = bma(braid_filter_maType, open, Period2)
+ma03 = bma(braid_filter_maType, close, Period3)
+
+max = math.max(math.max(ma01, ma02), ma03)
+min = math.min(math.min(ma01, ma02), ma03)
+dif = max - min
+
+filter = ta.atr(14) * PipsMinSepPercent / 100
+
+braid_condition = ma01 > ma02 and dif > filter ? 1 : ma02 > ma01 and dif > filter ? -1 : 0
+
+L_braid  = ma01 > ma02 and dif > filter
+S_braid =  ma02 > ma01 and dif > filter 
+
+// Range Identifier
+range_ma(mode, src, len) =>
+     mode == "SMA" ? ta.sma(close, len) :
+     mode == "EMA" ? ta.ema(close, len) :
+     mode == "SMMA (RMA)" ? ta.rma(close, len) :
+     mode == "WMA" ? ta.wma(close, len) :
+     mode == "VWMA" ? ta.vwma(close, len) :
+     mode == "DEMA" ? 2 * ta.ema(close,len) - ta.ema(ta.ema(close,len),len) :
+     mode == "HMA" ? ta.hma(close,len):
+     mode == "T3" ? T3(close,len) : 
+     mode == "GMA" ? gma(close,len) :
+     mode == "KAMA" ? KAMA(close,len) :
+     mode == "VIDYA" ? VIDYA(close, len) :
+     mode == "Karobein" ? Karobein(close,len) :
+     mode == "ELF" ? elf(close,len) :
+     mode == "SW-MA"? sw_ma(close,len) :
+     mode == "TRAMA" ? trama(close,len) :
+     mode == "McGinley" ? Mc(close,len) :
+     mode == "LSMA"  ? lsma(close,len) :
+     mode == "Kijun" ? kj(close,len) :
+     na
+
+ma1 = 100 * (range_ma(i_maType, i_maSource, i_maLen1) - range_ma(i_maType, i_maSource, i_maLen2)) * ta.atr(i_atrLen1) + 0.00001
+ma2 = ma1 / range_ma(i_maType, i_maSource, i_maLen2) / ta.atr(i_atrLen2)
+range_1 = (math.exp(2.0 * ma2) - 1.0) / (math.exp(2.0 * ma2) + 1.0)
+
+
+L_range_i = range_1 >= i_custom 
+S_range_i = range_1 <= -i_custom 
+
+//Super Trend 
+Satr = supmult * ta.atr(suplength)
+
+SlongStop = hl2 - Satr
+SlongStopPrev = nz(SlongStop[1], SlongStop)
+SlongStop := close[1] > SlongStopPrev ? math.max(SlongStop, SlongStopPrev) : SlongStop
+
+SshortStop = hl2 + Satr
+SshortStopPrev = nz(SshortStop[1], SshortStop)
+SshortStop := close[1] < SshortStopPrev ? math.min(SshortStop, SshortStopPrev) : SshortStop
+
+dir = 1
+dir := nz(dir[1], dir)
+dir := dir == -1 and close > SshortStopPrev ? 1 : dir == 1 and close < SlongStopPrev ? -1 : dir
+  
+//Condition
+Superlong = dir == 1 ? SlongStop : na
+Supershort = dir == 1 ? na : SshortStop
+
+Sup_L =  close > Superlong  
+Sup_S =  close < Supershort 
+
+// variables initialisation
+//-----------------------------------------FILTERS------------------------------------------------------------
+GoForLong = true
+GoForShort = true
+//filter out big moves
+if filterbigmovesbull
+    if (close/close[filterbull_bar]-1)>filterbigmovesvaluebull
+        GoForLong := false
+        
+if filterbigmovesbear
+    if (1-close/close[filterbear_bar])>filterbigmovesvaluebear
+        GoForShort := false        
+
+//avoid double-dipping
+if nodoubledipping
+    if ta.barssince(strategy.position_size>0 or strategy.position_size<0)<dip
+        GoForLong := false
+        GoForShort := false
+
+//MA filtering
+if uselongemafilter_1
+    if MA_EX1 >= MA_EX_type_final1 
+        GoForLong := false
+if uselongemafilter_2
+    if MA_EX2 >= MA_EX_type_final2
+        GoForLong := false
+if uselongemafilter_3
+    if MA_EX3 >= MA_EX_type_final3
+        GoForLong := false
+
+if useshortemafilter_1
+    if MA_EX1 <= MA_EX_type_final1 
+        GoForShort := false
+if useshortemafilter_2
+    if MA_EX2 <= MA_EX_type_final2
+        GoForShort := false        
+if useshortemafilter_3
+    if MA_EX3 <= MA_EX_type_final3
+        GoForShort := false  
+
+//day of week filtering
+if not Monday and dayofweek == dayofweek.monday
+    GoForLong := false
+if not Monday_S and dayofweek == dayofweek.monday    
+    GoForShort := false
+if not Tuesday and dayofweek == dayofweek.tuesday
+    GoForLong := false
+if not Tuesday_S and dayofweek == dayofweek.tuesday
+    GoForShort := false
+if not Wednesday and dayofweek == dayofweek.wednesday
+    GoForLong := false
+if not Wednesday_S and dayofweek == dayofweek.wednesday    
+    GoForShort := false  
+if not Thursday and dayofweek == dayofweek.thursday
+    GoForLong := false
+if not Thursday_S and dayofweek == dayofweek.thursday
+    GoForShort := false  
+if not Friday and dayofweek == dayofweek.friday
+    GoForLong := false
+if not Friday_S and dayofweek == dayofweek.friday
+    GoForShort := false  
+if not Saturday and dayofweek == dayofweek.saturday
+    GoForLong := false
+if not Saturday_S and dayofweek == dayofweek.saturday
+    GoForShort := false
+if not Sunday and dayofweek == dayofweek.sunday
+    GoForLong := false
+if not Sunday_S and dayofweek == dayofweek.sunday
+    GoForShort := false
+// adx filter
+if filteradx 
+    if  not set_ADX_BUY    
+        GoForLong := false
+    if  not set_ADX_SELL   
+        GoForShort := false    
+ 
+//Range filter
+if filter_RF
+    if not long_RF
+        GoForLong := false   
+    if not short_RF
+        GoForShort := false 
+//VFI filter
+if filter_VFI 
+    if not vfi_long
+        GoForLong := false
+    if not vfi_short
+        GoForShort := false 
+//BBP filter
+if filter_BBP
+    if not BBP_long
+        GoForLong := false
+    if not BBP_short
+        GoForShort := false 
+//TDFI
+if filter_TDFI
+    if not TDFI_L
+        GoForLong := false
+    if not TDFI_S
+        GoForShort := false 
+//magic trend
+if filter_magictrend
+    if not L_magic
+        GoForLong := false
+    if not S_magic
+        GoForShort := false
+//braid filter
+if filter_braid
+    if not L_braid
+        GoForLong := false
+    if not S_braid
+        GoForShort := false                       
+//range identifier
+if filter_range_I
+    if not L_range_i
+        GoForLong := false    
+    if not S_range_i
+        GoForShort := false   
+//Super Trend
+if filter_supertrend
+    if not Sup_L
+        GoForLong := false 
+    if not Sup_S
+        GoForShort := false
+
+//main logic
+
+main_ST = input.bool(true,'🟥 🟥 🟥  Main Strategy Settings 🟥 🟥 🟥 ',inline = "main_strategy"),main_ST_2 = input.bool(true,title = "",inline = "main_strategy")
+//------------------------------------------------------------------------------
+//main logic
+////=================================   ADX  ==================================
+_ADX_th = input.int(50 ,title = "Point", step = 1, group="MAIN STRATEGY")
+_DI_th = input.int(50 ,title = "Point", step = 1, group="MAIN STRATEGY")
+// lensig = input.int(14, title="ADX Smoothing", minval=1, maxval=50)
+// len = input.int(14, minval=1, title="DI Length")
+// up = ta.change(high)
+// down = -ta.change(low)
+// plusDM = na(up) ? na : (up > down and up > 0 ? up : 0)
+// minusDM = na(down) ? na : (down > up and down > 0 ? down : 0)
+// trur = ta.rma(ta.tr, len)
+// plus = fixnan(100 * ta.rma(plusDM, len) / trur)
+// minus = fixnan(100 * ta.rma(minusDM, len) / trur)
+// sum = plus + minus
+// adx = 100 * ta.rma(math.abs(plus - minus) / (sum == 0 ? 1 : sum), lensig)
+ADX_options = input.string('MASANAKAMURA', title='Adx Type', options=['CLASSIC', 'MASANAKAMURA'], group='ADX')
+_ADX_len = input.int(14, title='Adx lenght', minval=1)
+
+//ADX calculations
+calcADX(_len) =>
+    up = ta.change(high)
+    down = -ta.change(low)
+    plusDM = na(up) ? na : up > down and up > 0 ? up : 0
+    minusDM = na(down) ? na : down > up and down > 0 ? down : 0
+    truerange = ta.rma(ta.tr, _len)
+    _plus = fixnan(100 * ta.rma(plusDM, _len) / truerange)
+    _minus = fixnan(100 * ta.rma(minusDM, _len) / truerange)
+    sum = _plus + _minus
+    _adx = 100 * ta.rma(math.abs(_plus - _minus) / (sum == 0 ? 1 : sum), _len)
+    [_plus, _minus, _adx]
+calcADX_Masanakamura(_len) =>
+    SmoothedTrueRange = 0.0
+    SmoothedDirectionalMovementPlus = 0.0
+    SmoothedDirectionalMovementMinus = 0.0
+    TrueRange = math.max(math.max(high - low, math.abs(high - nz(close[1]))), math.abs(low - nz(close[1])))
+    DirectionalMovementPlus = high - nz(high[1]) > nz(low[1]) - low ? math.max(high - nz(high[1]), 0) : 0
+    DirectionalMovementMinus = nz(low[1]) - low > high - nz(high[1]) ? math.max(nz(low[1]) - low, 0) : 0
+    SmoothedTrueRange := nz(SmoothedTrueRange[1]) - nz(SmoothedTrueRange[1]) / _len + TrueRange
+    SmoothedDirectionalMovementPlus := nz(SmoothedDirectionalMovementPlus[1]) - nz(SmoothedDirectionalMovementPlus[1]) / _len + DirectionalMovementPlus
+    SmoothedDirectionalMovementMinus := nz(SmoothedDirectionalMovementMinus[1]) - nz(SmoothedDirectionalMovementMinus[1]) / _len + DirectionalMovementMinus
+    DIP = SmoothedDirectionalMovementPlus / SmoothedTrueRange * 100
+    DIM = SmoothedDirectionalMovementMinus / SmoothedTrueRange * 100
+    DX = math.abs(DIP - DIM) / (DIP + DIM) * 100
+    adx = ta.sma(DX, _len)
+    [DIP, DIM, adx]
+[DIPlusC, DIMinusC, ADXC] = calcADX(_ADX_len)
+[DIPlusM, DIMinusM, ADXM] = calcADX_Masanakamura(_ADX_len)
+
+_DIPlus = ADX_options == 'CLASSIC' ? DIPlusC : DIPlusM
+_DIMinus = ADX_options == 'CLASSIC' ? DIMinusC : DIMinusM
+_ADX = ADX_options == 'CLASSIC' ? ADXC : ADXM
+
+
+L_adx = _ADX > _ADX_th and _DIPlus> _DIMinus
+L_dmi = _DIPlus > _DI_th 
+S_adx = _ADX > _ADX_th  and _DIMinus > _DIPlus 
+S_dmi = _DIMinus > _DI_th 
+// 1 is bull signal
+bull =  L_adx or L_dmi
+// -1 is bear signal a
+bear =  S_adx or S_dmi
+exit_bull = false
+exit_bear = false
+
+
+// ————— RISK MANAGEMENT
+
+condintradayloss = setMaxIntradayLoss ? maxIntradayLoss : 100
+strategy.risk.max_intraday_loss(value=condintradayloss, type=strategy.percent_of_equity)
+
+condmaxdrawdown = setMaxDrawdown ? maxPercDd : 100
+strategy.risk.max_drawdown(value=condmaxdrawdown, type=strategy.percent_of_equity)
+
+// daily trades calculation
+
+oktoTradeDaily = true
+
+tradesIntradayCount = setNumberDailyTrades ? maxDailyTrades : BIG_NUMBER_COUNT
+strategy.risk.max_intraday_filled_orders(count=tradesIntradayCount)
+
+// weekly trades calculation
+tradesLastWeek = 0
+
+tradesLastWeek := if dayofweek == dayofweek.monday and dayofweek != dayofweek[1]
+    strategy.closedtrades[1] + strategy.opentrades[1]
+else
+    tradesLastWeek[1]
+
+// Calculate number of trades this week
+weeklyTrades = strategy.closedtrades + strategy.opentrades - tradesLastWeek
+okToTradeWeekly = setNumberWeeklyTrades ? weeklyTrades < maxWeeklyTrades : true
+
+
+// consecutive loss days in a row
+countConsLossDays = setmaxLosingDaysStreak ? maxLosingDaysStreak : BIG_NUMBER_COUNT
+strategy.risk.max_cons_loss_days(countConsLossDays)
+
+
+// Calculate the total losing streaks
+// Check if there's a new losing trade that increased the streak
+newLoss = strategy.losstrades > strategy.losstrades[1] and strategy.wintrades == strategy.wintrades[1] and strategy.eventrades == strategy.eventrades[1]
+
+// Determine current losing streak length
+streakLossLen = 0
+
+streakLossLen := if newLoss
+    nz(streakLossLen[1]) + 1
+else
+    if strategy.wintrades > strategy.wintrades[1] or strategy.eventrades > strategy.eventrades[1]
+        0
+    else
+        nz(streakLossLen[1])
+
+// Check if losing streak is under max allowed
+okToTradeLossStreak = setmaxLosingStreak ? streakLossLen < maxLosingStreak : true
+
+// Calculate the total winning streaks
+// See if there's a new winner that increased the streak
+newWin = strategy.wintrades > strategy.wintrades[1] and strategy.losstrades == strategy.losstrades[1] and strategy.eventrades == strategy.eventrades[1]
+
+// Figure out current winning streak length
+streakWinLen = 0
+
+streakWinLen := if newWin
+    nz(streakWinLen[1]) + 1
+else
+    if strategy.losstrades > strategy.losstrades[1] or strategy.eventrades > strategy.eventrades[1]
+        0
+    else
+        nz(streakWinLen[1])
+
+// Check if winning streak is under max allowed
+okToTradeWinStreak = setmaxWinStreak ? streakWinLen < maxWinStreak : true
+
+bool validOpenLongPositionx = bull and not (strategy.opentrades.size(strategy.opentrades - 1) > 0)
+bool validOpenShortPositionx = bear and not (strategy.opentrades.size(strategy.opentrades - 1) < 0)
+bool longIsActive = validOpenLongPositionx or strategy.opentrades.size(strategy.opentrades - 1) > 0 and not exit_bull
+bool shortIsActive = validOpenShortPositionx or strategy.opentrades.size(strategy.opentrades - 1) < 0 and not exit_bear
+bool validOpenLongPosition = bull and not (strategy.opentrades.size(strategy.opentrades - 1) > 0)
+bool validOpenShortPosition = bear and not (strategy.opentrades.size(strategy.opentrades - 1) < 0)
+float openAtr = ta.valuewhen(validOpenLongPosition or validOpenShortPosition, ta.atr(atrStopLength), 0)
+float openAtr2 = ta.valuewhen(validOpenLongPosition or validOpenShortPosition, ta.atr(_atrLength), 0)
+
+
+useSL = StopType != 'None'
+use_SL_Percent = StopType == 'Percent'
+use_SL_ATR = StopType == 'ATR'
+use_SL_ATR_T = StopType == "ATR Trailing"
+
+// Percent StopLoss
+longPercStopPrice = strategy.position_avg_price * (1 - LossPerc)
+shortPercStopPrice = strategy.position_avg_price * (1 + LossPerc)
+
+
+//ATR StopLoss
+xATR_Long_Stop = strategy.position_avg_price - openAtr * riskRatioATR
+xATR_Short_stop = strategy.position_avg_price + openAtr * riskRatioATR
+
+//ATR Traling
+xATR = ta.atr(atr_t_len)
+nLoss = atr_t_mult * xATR
+xATRTrailingStop = 0.0
+atr_iff_1 = close > nz(xATRTrailingStop[1], 0) ? ta.vwap(close)  - nLoss : ta.vwap(close)  + nLoss
+atr_iff_2 = close < nz(xATRTrailingStop[1], 0) and close[1] < nz(xATRTrailingStop[1], 0) ? math.min(nz(xATRTrailingStop[1]), ta.vwap(close) + nLoss) : atr_iff_1
+xATRTrailingStop := close > nz(xATRTrailingStop[1], 0) and close[1] > nz(xATRTrailingStop[1], 0) ? math.max(nz(xATRTrailingStop[1]), ta.vwap(close) - nLoss) : atr_iff_2
+
+
+// Capturig the atr value at signal time only
+
+final_SL_Long = 0.0
+final_SL_Short = 0.0
+
+final_SL_Long := if use_SL_Percent
+    longPercStopPrice
+else if use_SL_ATR 
+    xATR_Long_Stop 
+else if  use_SL_ATR_T
+    xATRTrailingStop 
+final_SL_Short := if use_SL_Percent
+    shortPercStopPrice
+else if use_SL_ATR 
+    xATR_Short_stop
+else if use_SL_ATR_T
+    xATRTrailingStop 
+
+USLL = useSL ? final_SL_Long : na
+USLS = useSL ? final_SL_Short : na
+
+//Require Close Stop Loss Settings
+
+es_sl_long = final_SL_Long * (1 - es_perc ) 
+es_sl_short = final_SL_Short * (1 + es_perc )
+
+useTP = TakeProfitType != 'None'
+
+trailingB = strategy.position_avg_price - USLL 
+trailingS = USLS - strategy.position_avg_price 
+
+TPlong = TakeProfitType == 'Percent' ? strategy.position_avg_price * (1 + LProfitPerc1) :  
+         TakeProfitType == 'RR' ? strategy.position_avg_price + ( trailingB * LratioTP) :
+         TakeProfitType == 'ATR' ? close + longTakeProfitAtrMul * openAtr2 :
+         na
+
+TPshort = TakeProfitType == 'Percent' ? strategy.position_avg_price * (1 - SProfitPerc1) :  
+          TakeProfitType == 'RR'? strategy.position_avg_price - (trailingS * SratioTP) : 
+          TakeProfitType == 'ATR'? close - shortTakeProfitAtrMul * openAtr2 :
+          na
+
+
+UTPL = useTP ? TPlong : na
+UTPS =  useTP ? TPshort : na
+
+use_multi_TP = set_multi_tp == 'Percent' 
+use_multi_RR = set_multi_tp == 'RR'
+
+multi_tp1 = use_multi_TP  ? strategy.position_avg_price * (1 + tp1) : strategy.position_avg_price + ( trailingB * tp1_rr )
+multi_tp2 = use_multi_TP  ?  strategy.position_avg_price * (1 + tp2): strategy.position_avg_price + ( trailingB * tp2_rr )
+multi_tp1s = use_multi_TP  ? strategy.position_avg_price * (1 - tp1) : strategy.position_avg_price - (trailingS * tp1_rr )
+multi_tp2s = use_multi_TP  ? strategy.position_avg_price * (1 - tp2) : strategy.position_avg_price - (trailingS * tp2_rr )
+
+takeProfitTrailingEnabled = input.bool(defval = false, title = "⚠️Trailing Take Profit", tooltip = 'Enable or disable the trailing for take profit. WARNING! This feature will repaint. Make sure you use it with "Bar Magnifier" and "Deep Backtesting" for realistic backtest results', group = "TakeProfit")
+deviationMethod = input.string(defval = 'PERC', title = 'Deviation Method', options = ['PERC', 'ATR'], tooltip = 'The method to calculate the Deviation for the Trailing Take Profit.', group = "TakeProfit")
+trailingTakeProfitDeviationPerc = input.float(defval = 1.0, title = 'Trailing Take Profit Deviation %', minval = 0.01, maxval = 100, step = 0.01, tooltip = 'The step to follow the price when the take profit limit is reached.', group = "TakeProfit") / 100
+deviationAtrMul = input.float(defval = 1.0, title = 'Deviation ATR Mul', minval = 0.01, step = 0.05, tooltip = 'Multiplier to be used on the initial entrys` ATR to calculate the step for following the price, when the take profit target is reached.', group = "TakeProfit")
+
+
+// LOGIC ============================================================================================================
+var float longTakeProfitPrice = na
+longTakeProfitPrice := if (longIsActive)
+    if (validOpenLongPositionx)
+        TPlong 
+    else
+        nz(longTakeProfitPrice[1], TPlong)
+else
+    na
+
+longTrailingTakeProfitStepTicks = deviationMethod == 'PERC' ? longTakeProfitPrice * trailingTakeProfitDeviationPerc / syminfo.mintick : deviationMethod == 'ATR' ?  deviationAtrMul * openAtr / syminfo.mintick : na 
+
+var float shortTakeProfitPrice = na
+shortTakeProfitPrice := if (shortIsActive)
+    if (validOpenShortPositionx)
+        TPshort 
+    else
+        nz(shortTakeProfitPrice[1],TPshort)
+else
+    na
+shortTrailingTakeProfitStepTicks = deviationMethod == 'PERC' ? shortTakeProfitPrice * trailingTakeProfitDeviationPerc / syminfo.mintick : deviationMethod == 'ATR' ? deviationAtrMul * openAtr / syminfo.mintick : na 
+                                     
+
+// LOGIC ============================================================================================================
+var float longTakeProfitPrice_2tp = na
+longTakeProfitPrice_2tp := if (longIsActive) and Ttp
+    if (validOpenLongPositionx)
+        multi_tp2
+    else
+        nz(longTakeProfitPrice_2tp[1], multi_tp2)
+else
+    na
+
+longTrailingTakeProfitStepTicks_2tp = deviationMethod == 'PERC' ? longTakeProfitPrice_2tp * trailingTakeProfitDeviationPerc / syminfo.mintick : deviationMethod == 'ATR' ? deviationAtrMul * openAtr / syminfo.mintick : na 
+
+var float shortTakeProfitPrice_2tp = na
+shortTakeProfitPrice_2tp := if (shortIsActive) and Ttp
+    if (validOpenShortPositionx)
+        multi_tp2s
+    else
+        nz(shortTakeProfitPrice_2tp[1],multi_tp2s)
+else
+    na
+shortTrailingTakeProfitStepTicks_2tp = deviationMethod == 'PERC' ? shortTakeProfitPrice_2tp * trailingTakeProfitDeviationPerc / syminfo.mintick : deviationMethod == 'ATR' ? deviationAtrMul * openAtr / syminfo.mintick : na 
+
+//Trailing Entry_____________________
+
+bool validOpenLongPosition_entry = bull and strategy.opentrades.size(strategy.opentrades - 1) <= 0
+var bool enteredLongPosition = false
+int barsSinceOpenLong = nz(ta.barssince(bull), 999999)
+int barsSinceCloseLong = nz(ta.barssince(exit_bull), 999999)
+int barsSinceEnterLong = nz(ta.barssince(enteredLongPosition), 999999)
+bool openLongIsActive = barsSinceCloseLong > barsSinceOpenLong // close -> open
+bool enterLongIsPending = barsSinceEnterLong > barsSinceOpenLong // enter -> open
+bool tryEnterLongPosition = entryOrderType != 'MARKET'  and openLongIsActive and enterLongIsPending and strategy.opentrades.size(strategy.opentrades - 1) <= 0
+
+bool validOpenShortPosition_entry = bear and strategy.opentrades.size(strategy.opentrades - 1) >= 0
+var bool enteredShortPosition = false
+int barsSinceOpenShort = nz(ta.barssince(bear), 999999)
+int barsSinceCloseShort = nz(ta.barssince(exit_bear), 999999)
+int barsSinceEnterShort = nz(ta.barssince(enteredShortPosition), 999999)
+bool openShortIsActive = barsSinceCloseShort > barsSinceOpenShort // close -> open
+bool enterShortIsPending = barsSinceEnterShort >= barsSinceOpenShort // enter -> open
+bool tryEnterShortPosition = entryOrderType != 'MARKET'  and openShortIsActive and enterShortIsPending and strategy.opentrades.size(strategy.opentrades - 1) >= 0
+
+
+var float longLimitEntryPrice = na
+bool isFirstValidOpenLongPosition = entryOrderType != 'MARKET' and validOpenLongPosition_entry and na(longLimitEntryPrice[1])
+longLimitEntryPrice := if (isFirstValidOpenLongPosition)
+    if (entryOrderType == 'LIMIT') and  entryType_Method == 'PERC'
+        close * (1 - distEntryPerc) 
+else if (tryEnterLongPosition)
+    if (entryLimitMode == 'FIXED')
+        nz(longLimitEntryPrice[1], 999999.9)
+    else if (entryLimitMode == 'TRAIL')
+        if (entryOrderType == 'LIMIT')
+            entryType_Method == 'PERC' ? math.max(high * (1 - distEntryPerc), nz(longLimitEntryPrice[1])) : entryType_Method == 'ATR' ? math.max(high - (deviationAtrMul2 * openAtr),nz(longLimitEntryPrice[1])) : na
+else
+    na
+
+var float ShortLimitEntryPrice = na
+bool isFirstValidOpenShortPosition = entryOrderType != 'MARKET' and validOpenShortPosition_entry and na(ShortLimitEntryPrice[1])
+ShortLimitEntryPrice := if (isFirstValidOpenShortPosition)
+    if (entryOrderType == 'LIMIT') and entryType_Method == 'PERC'
+        close * (1 + distEntryPerc) 
+else if (tryEnterShortPosition)
+    if (entryLimitMode == 'FIXED')
+        nz(ShortLimitEntryPrice[1], 999999.9)
+    else if (entryLimitMode == 'TRAIL')
+        if (entryOrderType == 'LIMIT')
+            entryType_Method == 'PERC' ? math.min(low * (1 + distEntryPerc),nz(ShortLimitEntryPrice[1],999999.9)) : entryType_Method == 'ATR' ? math.min(low + (deviationAtrMul2 * openAtr),nz(ShortLimitEntryPrice[1], 999999.9)) : na
+else
+    na
+
+use_Stop = input.bool(false,"🏛️Order Sizing",group="🏛️order sizing")
+set_risk = input.string(title ="methods",defval = "Risk Base",options = ["Risk Base","Turtle", "Leverage","Technical Algo"], group="🏛️order sizing", inline="risk")
+riskValue = input.float(2.0, title="Risk ", inline="risk",group="🏛️order sizing")
+_leverage = input.float(1, 'Lev', step=.5, group= "🏛️order sizing", inline="risk")
+slAmount = StopType == 'ATR' ? openAtr * riskRatioATR : StopType == "ATR Trailing" ? atr_t_mult * xATR : na 
+slPercent = math.abs((1 - (close - slAmount) / close) * 100)
+riskAmt = strategy.equity * riskValue / 100
+entryQty = math.abs(riskAmt / slPercent * 100)  / close
+
+percent2money(price, percent) =>
+    price * percent / 100 * syminfo.pointvalue
+calcPositionSize(entryPrice, slPercent) =>
+    risk = strategy.equity * riskValue / 100   
+    risk / percent2money(entryPrice, slPercent)
+
+lowzonemultiplier = input.float(0.5, "Low", step=0.1, minval=0, maxval=10,group="🏛️order sizing",inline = "DA" )
+midzonemultiplier = input.float(1, "Mid", step=0.1, minval=0, maxval=10,group="🏛️order sizing",inline = "DA" )
+highzonemultiplier = input.float(1.5, "High", step=0.1, minval=0, maxval=10,group="🏛️order sizing", inline = "DA")
+_risk_source_input = input.string('ATR', 'DA Source',options=['close', 'volume','MA 5','MA 25','MACD','volume MA','ATR','VWAP','RSI','MFI','ADX'], group="🏛️order sizing", inline = "DA2")
+riskbandwidth = input.float(3.1, "Risk Band", step=0.01, minval=2,group="🏛️order sizing",inline = "DA2")
+mlt = input.float(0.5,step=0.1,title="turtle Mult",group="🏛️order sizing", inline = "turtle")
+len_turtle = input.int(20,step=1,title="turtle Len",group="🏛️order sizing", inline = "turtle")
+
+//risk_base
+risk_source = _risk_source_input == 'close' ? close : 
+ _risk_source_input == 'volume' ? volume : 
+ _risk_source_input == 'MA 5' ? ta.sma(close,5) : 
+ _risk_source_input == 'MA 25' ? ta.sma(close,25) : 
+ _risk_source_input == 'MACD' ? ta.sma(close,5)-ta.sma(close,25) : 
+ _risk_source_input == 'volume MA' ? ta.sma(volume,25) : 
+ _risk_source_input == 'ATR' ? ta.rma(ta.tr(true),14) : 
+ _risk_source_input == 'VWAP' ? ta.vwap(close) : 
+ _risk_source_input == 'RSI' ? ta.rsi(close,14) : 
+ _risk_source_input == 'MFI' ? ta.mfi(close,14) :
+ _risk_source_input == 'ADX'? ta.sma(DX,ADX_len) : close
+
+
+risk_highest = ta.highest(risk_source,100)
+risk_lowest = ta.lowest(risk_source,100)
+
+risk_third = ((risk_highest - risk_lowest) / riskbandwidth)
+
+risk_zone_1 = risk_lowest + risk_third 
+risk_zone_2 = risk_highest - risk_third 
+
+volumemultiplier = 1.0
+
+if risk_lowest <= risk_source and risk_source <= risk_zone_1
+    volumemultiplier := lowzonemultiplier
+
+
+if risk_zone_1 < risk_source and risk_source <= risk_zone_2
+    volumemultiplier :=midzonemultiplier
+    
+
+if risk_zone_2 < risk_source and risk_source <= risk_highest
+    volumemultiplier :=highzonemultiplier
+
+orderSize = (strategy.equity / close )
+orderSize := (strategy.equity / close * volumemultiplier)
+
+
+atr_daily= request.security(syminfo.tickerid, "1D", ta.atr(len_turtle))
+voltly = atr_daily * mlt 
+turtlePercent = math.abs((1 - (close - voltly ) / close) * 100)
+riskAmt2 = strategy.equity * riskValue / 100
+f_invest = math.abs(riskAmt2 / turtlePercent * 100)  / close 
+
+riskCalc = StopType == 'Percent' ? calcPositionSize(close,(LossPerc*100)) : 
+           StopType == 'ATR' ?  math.abs(riskAmt / slPercent * 100)  / close  : 
+           StopType == 'ATR Trailing' ?  math.abs(riskAmt / slPercent * 100)  / close  :
+           na
+
+Qty = set_risk == "Risk Base" ? riskCalc :
+      set_risk == "Turtle" ? f_invest :
+      set_risk == "Leverage" ? math.min(math.max(.000001, strategy.equity / close * _leverage), 1000000000) :
+      set_risk == "Technical Algo" ? orderSize :
+      na
+
+// ------------------------------------- order size ------------------------
+
+// The BarInSession function returns true when
+// the current bar is inside the session parameter
+BarInSession(sess) =>
+    time(timeframe.period, sess,"Asia/Tokyo") != 0
+in_session = BarInSession(Session)
+okToTradeInSession = CloseSession ? in_session : true
+new_session = in_session and not in_session[1]
+
+//  can close a position at any given time
+var int T = 0
+Close_time = hour[T] == cltime
+Close_time2 = minute[T] == cltime2
+
+//Position Holding Expiration Date
+barsSinceLastEntry() =>
+    strategy.opentrades > 0 ? bar_index - strategy.opentrades.entry_bar_index(strategy.opentrades - 1) : na
+
+
+// consolidation of the conditions
+okToTrade = okToTradeWeekly and okToTradeLossStreak and okToTradeWinStreak and TradeDateIsAllowed() and okToTradeInSession  // and TradeHourlyIsAllowed()
+
+if bull and okToTrade and okToTradeInSession and enable_long_strategy == true and GoForLong and (entryOrderType == 'MARKET' ? validOpenLongPosition_entry : tryEnterLongPosition)  and not use_Stop //and validOpenLongPosition_entry
+    strategy.entry('Long', strategy.long, limit = longLimitEntryPrice , alert_message = Alert_OpenLong)
+// Go Short
+if bear and okToTrade and okToTradeInSession and enable_short_strategy == true and GoForShort and (entryOrderType == 'MARKET' ? validOpenShortPosition_entry: tryEnterShortPosition)  and not use_Stop //and validOpenShortPosition_entry
+    strategy.entry('Short', strategy.short, limit = ShortLimitEntryPrice, alert_message = Alert_OpenShort )
+// Go long
+if bull and okToTrade and okToTradeInSession and enable_long_strategy == true and GoForLong and use_Stop and (entryOrderType == 'MARKET' ? validOpenLongPosition_entry : tryEnterLongPosition) //and validOpenLongPosition_entry
+    strategy.entry('Long', strategy.long, limit = longLimitEntryPrice , qty = Qty , alert_message = Alert_OpenLong )
+// Go Short
+if bear and okToTrade and okToTradeInSession and enable_short_strategy == true and GoForShort and use_Stop and (entryOrderType == 'MARKET' ? validOpenShortPosition_entry: tryEnterShortPosition) //and validOpenShortPosition_entry 
+    strategy.entry('Short', strategy.short, limit = ShortLimitEntryPrice, qty = Qty, alert_message = Alert_OpenShort)
+
+// TP Long
+if strategy.position_size > 0 and not Ttp 
+    strategy.exit(id='Long',limit = UTPL, stop = close_stop ? na : USLL, comment='Exit Long TP', alert_message = Alert_Stoplong)
+// TP Short
+if strategy.position_size < 0  and not Ttp 
+    strategy.exit(id='Short',limit = UTPS, stop = close_stop ? na : USLS, comment='Exit Short TP', alert_message = Alert_Stopshort)
+
+if  strategy.position_size > 0 and Ttp and (longIsActive) 
+    strategy.exit ("TP1", from_entry="Long", limit=multi_tp1,stop=USLL,qty_percent=tp1Amount,alert_message = Alert_LongTP)
+    strategy.exit ("TP2", from_entry="Long", limit = takeProfitTrailingEnabled ? na : longTakeProfitPrice_2tp, stop = USLL , trail_price = takeProfitTrailingEnabled ? longTakeProfitPrice_2tp : na, trail_offset = takeProfitTrailingEnabled ? longTrailingTakeProfitStepTicks_2tp : na,alert_message = Alert_LongTP)
+if strategy.position_size < 0  and Ttp and (shortIsActive)
+    strategy.exit ("TP1", from_entry="Short", limit=multi_tp1s,stop=USLS,qty_percent=tp1Amount,alert_message = Alert_ShortTP)
+    strategy.exit ("TP2", from_entry="Short", limit = takeProfitTrailingEnabled ? na : shortTakeProfitPrice_2tp, stop = USLS , trail_price = takeProfitTrailingEnabled ? shortTakeProfitPrice_2tp : na, trail_offset = takeProfitTrailingEnabled ? shortTrailingTakeProfitStepTicks_2tp : na,alert_message = Alert_ShortTP)
+if (longIsActive) and takeProfitTrailingEnabled and not Ttp
+    strategy.exit(id = 'Long Take Profit / Stop Loss', from_entry = 'Long',limit = takeProfitTrailingEnabled ? na : longTakeProfitPrice, stop = close_stop ? na : USLL , trail_price = takeProfitTrailingEnabled ? longTakeProfitPrice : na, trail_offset = takeProfitTrailingEnabled ? longTrailingTakeProfitStepTicks : na,alert_message = Alert_LongTP)
+if (shortIsActive) and takeProfitTrailingEnabled and not Ttp
+    strategy.exit(id = 'Short Take Profit / Stop Loss', from_entry = 'Short', limit = takeProfitTrailingEnabled ? na : shortTakeProfitPrice, stop = close_stop ? na : USLS , trail_price = takeProfitTrailingEnabled ? shortTakeProfitPrice : na, trail_offset = takeProfitTrailingEnabled ? shortTrailingTakeProfitStepTicks : na, alert_message = Alert_ShortTP)
+
+// Execute Exits
+if closeOnOpposite and strategy.position_size > 0 and bear  // and open_all_shorts
+    strategy.close(id='Long', alert_message = Alert_Stoplong  , comment='Short Signal\nClose Long')
+if closeOnOpposite and strategy.position_size < 0 and bull  // and open_all_longs
+    strategy.close(id='Short', alert_message = Alert_Stopshort  , comment='Long Signal\nClose Short')
+if strategy.position_size > 0 and exit_bull
+    strategy.close(id='Long', alert_message = Alert_Stoplong ,comment='Custom Close Signal\nClose Long')
+if strategy.position_size < 0 and exit_bear
+    strategy.close(id='Short', alert_message = Alert_Stopshort ,comment='Custom Close Signal\nClose Short')
+if set_close_time and Close_time and Close_time2 and strategy.position_size > 0 
+    strategy.close(id='Long', alert_message = Alert_Stoplong  , comment='time to close Long')
+if set_close_time and Close_time and Close_time2 and strategy.position_size < 0 
+    strategy.close(id='Short', alert_message = Alert_Stopshort  , comment='time to close Short')
+if set_timelimit and barsSinceLastEntry() >= HOLD_long and strategy.position_size > 0 
+    strategy.close(id='Long', alert_message = Alert_Stoplong , comment='TimeLimit Long')
+if set_timelimit and barsSinceLastEntry() >= HOLD_short and strategy.position_size < 0 
+    strategy.close(id='Short', alert_message = Alert_Stopshort , comment='TimeLimit Short')
+if close_stop and strategy.position_size > 0 and close <= es_sl_long
+    strategy.close(id='Long', alert_message = Alert_Stoplong , comment='Emergency Stop Long')
+if close_stop and strategy.position_size < 0 and close >= es_sl_short
+    strategy.close(id='Short', alert_message = Alert_Stopshort , comment='Emergency Stop Short')
+
+
+// Flatten strategy when max losing streak is reached
+close_strat = not okToTradeWeekly or not okToTradeLossStreak or not okToTradeWinStreak or not TradeDateIsAllowed()
+
+if close_strat
+    // close all existing orders
+    strategy.close_all()
+//PLOT FIXED SLTP LINE
+
+TP_plot=input.bool(true,title = "📊show Plot TP SL",group="📊Dashboard")
+
+P_SL_L = plot(TP_plot and strategy.position_size > 0 ? USLL : na, style=plot.style_linebr, color=color.new(color.red, 0), linewidth=3, title="Long SL") 
+P_SL_ES_L = plot(close_stop and TP_plot and strategy.position_size > 0 ? es_sl_long : na and strategy.position_size > 0 ? USLL : na, style=plot.style_linebr, color=color.new(color.orange, 0), linewidth=3, title="Long ES SL")
+P_SL_S = plot(TP_plot and strategy.position_size < 0 ? USLS : na, style=plot.style_linebr, color=color.new(color.red, 0), linewidth=3, title="Short SL") 
+P_SL_ES_S = plot(close_stop and TP_plot and strategy.position_size < 0 ? es_sl_short : na and strategy.position_size < 0 ? USLS : na, style=plot.style_linebr, color=color.new(color.orange, 0), linewidth=3, title="Short ES SL")
+P_TP_L = plot(TP_plot and not Ttp and strategy.position_size > 0 ? UTPL : na, style=plot.style_linebr, color=color.new(color.green, 0), linewidth=3, title="Long Take Profit") 
+P_TP_S = plot(TP_plot and not Ttp and strategy.position_size < 0 ? UTPS : na, style=plot.style_linebr, color=color.new(color.green, 0), linewidth=3, title="Short Take Profit") 
+ep =  plot(TP_plot ? strategy.position_avg_price : na ,color=color.new(color.white,50), style=plot.style_linebr, linewidth=3, title="Entry Price ")
+
+P_TP1 = plot(TP_plot and Ttp and strategy.position_size > 0 ? multi_tp1 : na or Ttp and strategy.position_size < 0 ? multi_tp1s : na ,style=plot.style_linebr, color=color.new(color.green, 0), linewidth=2, title="multi Take Profit 1" ) 
+P_TP2 = plot(TP_plot and Ttp and strategy.position_size > 0 ? multi_tp2 : na or Ttp and strategy.position_size < 0 ? multi_tp2s : na ,style=plot.style_linebr, color=color.new(color.yellow, 0), linewidth=2, title="multi Take Profit 2" ) 
+
+
+fill(ep,P_TP1, color.new(color.green,80)) 
+fill(P_TP1,P_TP2, color.new(color.yellow,80))
+fill(ep,P_SL_L,color.new(color.red,80))
+fill(ep,P_SL_S,color.new(color.red,80))
+fill(ep,P_TP_L,color.new(color.green,80))
+fill(ep,P_TP_S,color.new(color.green,80))
+fill(P_SL_L,P_SL_ES_L,color.new(color.orange,80))
+fill(P_SL_S,P_SL_ES_S,color.new(color.orange,80))
+
+
+showDashboard = input.bool(group="📊Dashboard", title="📊Show Dashboard", defval=false)
+if showDashboard
+    var table tablo = table.new(position.bottom_right,12,12,border_width=1,border_color=color.rgb(0, 0, 0), frame_color=color.rgb(0, 0, 0), frame_width=1)
+    var table tablo2 = table.new(Ttp == true ? position.top_right : position.middle_right,10,10,border_width=2,border_color=color.rgb(0, 0, 0), frame_color=color.rgb(0, 0, 0), frame_width=2)
+
+    dollarReturn = strategy.netprofit
+    newWin  = (strategy.wintrades  > strategy.wintrades[1]) and (strategy.losstrades == strategy.losstrades[1]) and (strategy.eventrades == strategy.eventrades[1])
+    newLoss = (strategy.wintrades == strategy.wintrades[1]) and (strategy.losstrades  > strategy.losstrades[1]) and (strategy.eventrades == strategy.eventrades[1])
+    
+    varip int winRow     = 0
+    varip int lossRow    = 0
+    varip int maxWinRow  = 0
+    varip int maxLossRow = 0
+ 
+    if newWin
+        lossRow := 0
+        winRow := winRow + 1
+    if winRow > maxWinRow
+        maxWinRow := winRow
+        
+    if newLoss
+        winRow := 0
+        lossRow := lossRow + 1
+    if lossRow > maxLossRow
+        maxLossRow := lossRow
+ 
+ 
+    if barstate.islastconfirmedhistory 
+        _winRate = ( strategy.wintrades / strategy.closedtrades ) * 100
+        _numOfDaysInStrategy = (strategy.opentrades.entry_time(0) - strategy.closedtrades.entry_time(0)) / (1000 * 3600 * 24)
+        //dollarReturn = strategy.netprofit
+        _profit = (strategy.netprofit / strategy.initial_capital) * 100
+        Balance  = strategy.initial_capital + strategy.netprofit 
+        LeverageParameter = math.abs(nz(strategy.position_size * strategy.position_avg_price / Balance))
+        
+ //Column       
+　　　 //Column       
+        table.cell(tablo,0,0,bgcolor=color.new(color.red, 50),text_color=color.white, text="NET PROFIT")
+        table.cell(tablo,1,0,bgcolor=color.new(color.red,50),text_color=color.white, text="TOTAL PROFIT")
+        table.cell(tablo,2,0,bgcolor=color.new(color.red,50),text_color=color.white, text="TOTAL LOSS")
+        table.cell(tablo,3,0,bgcolor=color.new(color.red,50),text_color=color.white, text="PROFIT FACTOR")
+        table.cell(tablo,4,0,bgcolor=color.new(color.red,50),text_color=color.white, text="DAILY PROFIT")
+        table.cell(tablo,5,0,bgcolor=color.new(color.red,50),text_color=color.white, text="WIN TRADES")
+        table.cell(tablo,0,2,bgcolor=color.new(color.red,50),text_color=color.white, text="LOSS TRADES")
+        table.cell(tablo,1,2,bgcolor=color.new(color.red,50),text_color=color.white, text="WIN STREAKS")
+        table.cell(tablo,2,2,bgcolor=color.new(color.red,50),text_color=color.white, text="LOSE STREAKS")
+        table.cell(tablo,3,2,bgcolor=color.new(color.red,50),text_color=color.white, text="LEVERAGE")
+        table.cell(tablo,4,2,bgcolor=color.new(color.red,50),text_color=color.white, text="EQUITY")
+        table.cell(tablo,5,2,bgcolor=color.new(color.red,50),text_color=color.white, text="BALANCE")
+// ROWS
+        table.cell(tablo,0,1, bgcolor=color.new(#ff4444, 95),text_color=color.white, text=str.tostring(strategy.netprofit,"##########"))
+        table.cell(tablo,1,1, bgcolor=color.new(#ff4444, 95),text_color=color.white, text=str.tostring(strategy.grossprofit,"##########"))
+        table.cell(tablo,2,1, bgcolor=color.new(#ff4444, 95),text_color=color.white, text=str.tostring(strategy.grossloss,"###########"))
+        table.cell(tablo,3,1, bgcolor=color.new(#ff4444, 95),text_color=color.white, text=str.tostring(strategy.grossprofit / strategy.grossloss,"#.##"))
+        table.cell(tablo,4,1, bgcolor=color.new(#ff4444, 95),text_color=color.white, text=str.tostring(_profit / _numOfDaysInStrategy, '#########################.#####')+"%")
+        table.cell(tablo,5,1, bgcolor=color.new(#ff4444, 95),text_color=color.white, text=str.tostring(strategy.wintrades,"#######"))
+        table.cell(tablo,0,3, bgcolor=color.new(#ff4444, 95),text_color=color.white, text=str.tostring(strategy.losstrades,"######"))
+        table.cell(tablo,1,3, bgcolor=color.new(#ff4444, 95),text_color=color.white, text=str.tostring(maxWinRow, '######'))
+        table.cell(tablo,2,3, bgcolor=color.new(#ff4444, 95),text_color=color.white, text=str.tostring(maxLossRow, '######'))
+        table.cell(tablo,3,3, bgcolor=color.new(#ff4444, 95),text_color=color.white, text=str.tostring(LeverageParameter,'##.##')+'x')
+        table.cell(tablo,4,3, bgcolor=color.new(#ff4444, 95),text_color=color.white, text=str.tostring(strategy.equity, '######'))
+        table.cell(tablo,5,3, bgcolor=color.new(#ff4444, 95),text_color=color.white, text=str.tostring(Balance,'######'))
+//Column       
+    if Ttp == false
+        table.cell(tablo2, 0, 0, bgcolor=color.new(color.red, 50), text_color=color.white, text="ENTRY")
+        table.cell(tablo2, 0, 1, bgcolor=color.new(color.red, 50), text_color=color.white, text="TAKE PROFIT")
+        table.cell(tablo2, 2, 0, bgcolor=color.new(color.red, 50), text_color=color.white, text="POSITION")
+        table.cell(tablo2, 2, 1, bgcolor=color.new(color.red, 50), text_color=color.white, text="STOP LOSS")
+        table.cell(tablo2, 4, 0, bgcolor=color.new(color.red, 50), text_color=color.white, text="BAR")
+        table.cell(tablo2, 4, 1, bgcolor=color.new(color.red, 50), text_color=color.white, text="ES STOP") 
+// Rows
+        table.cell(tablo2, 1, 0, bgcolor=color.new(#ff4444, 95), text_color=color.white, text=str.tostring(strategy.position_avg_price, '######'))
+        table.cell(tablo2, 1, 1, bgcolor=color.new(#ff4444, 95), text_color=color.white, text = str.tostring(not Ttp and strategy.position_size > 0 ? UTPL : na or not Ttp and strategy.position_size < 0 ? UTPS : na , '######'))
+        table.cell(tablo2, 3, 0, bgcolor=color.new(#ff4444, 95), text_color=color.white, text=str.tostring(strategy.position_size * strategy.position_avg_price,'######' ))
+        table.cell(tablo2, 3, 1, bgcolor=color.new(#ff4444, 95), text_color=color.white, text=str.tostring(strategy.position_size > 0 ? USLL : na or strategy.position_size < 0 ? USLS : na, '######'))
+        table.cell(tablo2, 5, 0, bgcolor=color.new(#ff4444, 95), text_color=color.white, text=str.tostring( barsSinceLastEntry() + 1, '#####'))
+        table.cell(tablo2, 5, 1, bgcolor=color.new(#ff4444, 95), text_color=color.white, text=str.tostring( strategy.position_size > 0 and close_stop ? es_sl_long: na or strategy.position_size < 0 and close_stop ? es_sl_short: na , '######'))
+ //Column   
+    if Ttp == true
+        table.cell(tablo2,0,0,bgcolor=color.new(color.red,50),text_color=color.white, text="ENTRY")
+        table.cell(tablo2,0,1,bgcolor=color.new(color.red,50),text_color=color.white, text="TAKE PROFIT")
+        table.cell(tablo2,0,2,bgcolor=color.new(color.red,50),text_color=color.white, text="TAKE PROFIT2")
+        table.cell(tablo2,0,3,bgcolor=color.new(color.red,50),text_color=color.white, text="STOP LOSS")
+        table.cell(tablo2,0,4,bgcolor=color.new(color.red,50),text_color=color.white, text="POSITION")
+        
+// Rows
+        table.cell(tablo2,1,0,bgcolor=color.black,text_color=color.white, text=str.tostring(strategy.position_avg_price, '######.##'))
+        table.cell(tablo2,1,1,bgcolor=color.black,text_color=color.white, text = str.tostring(Ttp and strategy.position_size > 0 ? multi_tp1 : na or Ttp and strategy.position_size < 0 ? multi_tp1s : na , '#######.##'))
+        table.cell(tablo2,1,2,bgcolor=color.black,text_color=color.white, text = str.tostring(Ttp and strategy.position_size > 0 ? multi_tp2 : na or Ttp and strategy.position_size < 0 ? multi_tp2s : na , '######.##'))
+        table.cell(tablo2,1,3,bgcolor=color.black,text_color=color.white, text=str.tostring(strategy.position_size > 0 ? USLL : na or strategy.position_size < 0 ? USLS : na , '######.##'))    
+        table.cell(tablo2,1,4,bgcolor=color.black,text_color=color.white, text=str.tostring(strategy.position_size * strategy.position_avg_price ,'######.##'))
+
+show_performance = input.bool(false, '📊Show Monthly Performance',group="📊Dashboard" )
+prec = 2//input(2, 'Return Precision',group="Dashboard" )
+
+if show_performance
+    new_month = month(time) != month(time[1])
+    new_year  = year(time)  != year(time[1])
+    
+    eq = strategy.equity
+    
+    bar_pnl = eq / eq[1] - 1
+    
+    cur_month_pnl = 0.0
+    cur_year_pnl  = 0.0
+    
+    // Current Monthly P&L
+    cur_month_pnl := new_month ? 0.0 : 
+                     (1 + cur_month_pnl[1]) * (1 + bar_pnl) - 1 
+    
+    // Current Yearly P&L
+    cur_year_pnl := new_year ? 0.0 : 
+                     (1 + cur_year_pnl[1]) * (1 + bar_pnl) - 1  
+    
+    // Arrays to store Yearly and Monthly P&Ls
+    var month_pnl  = array.new_float(0)
+    var month_time = array.new_int(0)
+    
+    var year_pnl  = array.new_float(0)
+    var year_time = array.new_int(0)
+    
+    last_computed = false
+    
+    if (not na(cur_month_pnl[1]) and (new_month or barstate.islastconfirmedhistory))
+        if (last_computed[1])
+            array.pop(month_pnl)
+            array.pop(month_time)
+            
+        array.push(month_pnl , cur_month_pnl[1])
+        array.push(month_time, time[1])
+    
+    if (not na(cur_year_pnl[1]) and (new_year or barstate.islastconfirmedhistory))
+        if (last_computed[1])
+            array.pop(year_pnl)
+            array.pop(year_time)
+            
+        array.push(year_pnl , cur_year_pnl[1])
+        array.push(year_time, time[1])
+    
+    last_computed := barstate.islastconfirmedhistory ? true : nz(last_computed[1])
+    
+    // Monthly P&L Table    
+    var monthly_table = table(na)
+    
+    if (barstate.islastconfirmedhistory)
+        monthly_table := table.new(position.bottom_left, columns = 14, rows = array.size(year_pnl) + 1, border_width = 1)
+    
+        table.cell(monthly_table, 0,  0, "",     bgcolor = color.new(color.red,70),text_color=color.white)
+        table.cell(monthly_table, 1,  0, "Jan",  bgcolor = color.new(color.red,70),text_color=color.white)
+        table.cell(monthly_table, 2,  0, "Feb",  bgcolor = color.new(color.red,70),text_color=color.white)
+        table.cell(monthly_table, 3,  0, "Mar",  bgcolor = color.new(color.red,70),text_color=color.white)
+        table.cell(monthly_table, 4,  0, "Apr",  bgcolor = color.new(color.red,70),text_color=color.white)
+        table.cell(monthly_table, 5,  0, "May",  bgcolor = color.new(color.red,70),text_color=color.white)
+        table.cell(monthly_table, 6,  0, "Jun",  bgcolor = color.new(color.red,70),text_color=color.white)
+        table.cell(monthly_table, 7,  0, "Jul",  bgcolor = color.new(color.red,70),text_color=color.white)
+        table.cell(monthly_table, 8,  0, "Aug",  bgcolor = color.new(color.red,70),text_color=color.white)
+        table.cell(monthly_table, 9,  0, "Sep",  bgcolor = color.new(color.red,70),text_color=color.white)
+        table.cell(monthly_table, 10, 0, "Oct",  bgcolor = color.new(color.red,70),text_color=color.white)
+        table.cell(monthly_table, 11, 0, "Nov",  bgcolor = color.new(color.red,70),text_color=color.white)
+        table.cell(monthly_table, 12, 0, "Dec",  bgcolor = color.new(color.red,70),text_color=color.white)
+        table.cell(monthly_table, 13, 0, "Year", bgcolor = color.new(color.red,70),text_color=color.white)
+    
+        for yi = 0 to array.size(year_pnl) - 1
+            table.cell(monthly_table, 0,  yi + 1, str.tostring(year(array.get(year_time, yi))), bgcolor = color.new(color.red,70),text_color=color.white)
+            
+            y_color = array.get(year_pnl, yi) > 0 ? color.new(color.teal, transp = 40) : color.new(color.gray, transp = 40)
+            table.cell(monthly_table, 13, yi + 1, str.tostring(math.round(array.get(year_pnl, yi) * 100, prec)), bgcolor = y_color, text_color=color.new(color.white, 0))
+            
+        for mi = 0 to array.size(month_time) - 1
+            m_row   = year(array.get(month_time, mi))  - year(array.get(year_time, 0)) + 1
+            m_col   = month(array.get(month_time, mi)) 
+            m_color = array.get(month_pnl, mi) > 0 ? color.new(color.teal, transp = 40) : color.new(color.maroon, transp = 40)
+            
+            table.cell(monthly_table, m_col, m_row, str.tostring(math.round(array.get(month_pnl, mi) * 100, prec)), bgcolor = m_color, text_color=color.new(color.white, 0))
