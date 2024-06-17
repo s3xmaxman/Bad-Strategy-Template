@@ -1,5 +1,5 @@
 //@version=5
-SystemName = 'BST3.0'
+SystemName = 'BST'
 InitCapital = 10000
 InitPosition = 100.0
 InitCommission = 0.04
