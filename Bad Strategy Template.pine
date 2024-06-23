@@ -191,9 +191,6 @@ atr_t_mult  = input.float(1.5,title='Trailing Mult', step = 0.1, inline="inputsA
 // ————— Require Close Below Stop Loss
 close_stop = input.bool(false, "Require Close Below Stop Loss", inline = "equire Close Below Stop Loss", group = "StopLoss"), es_perc = input.float(0.3, step = 0.1, minval=0.0, title = "equire Close Below Stop Loss", group = "StopLoss") * 0.01
 
-
-
-
 // ————— Percent
 TakeProfitType = input.string(title='✅Profit Type', defval='RR', options=['None', 'Percent', 'RR','ATR'], inline = "TakeProfitType", group = "TakeProfit")
 LProfitPerc1 = input.float(title='TP%(long)', minval=0.0, step=0.1, defval=1.5, inline = "TP", group = "TakeProfit") * 0.01
@@ -732,8 +729,8 @@ if filter_supertrend
 //main logic
 
 main_ST = input.bool(true,'🟥 🟥 🟥  Main Strategy Settings 🟥 🟥 🟥 ',inline = "main_strategy"),main_ST_2 = input.bool(true,title = "",inline = "main_strategy")
-//------------------------------------------------------------------------------
 //main logic
+
 ////=================================   ADX  ==================================
 _ADX_th = input.int(50 ,title = "Point", step = 1, group="MAIN STRATEGY")
 _DI_th = input.int(50 ,title = "Point", step = 1, group="MAIN STRATEGY")
