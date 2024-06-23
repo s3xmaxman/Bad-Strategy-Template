@@ -6,17 +6,17 @@ InitCommission = 0.04
 InitPyramidMax = 1
 strategy(title=SystemName, shorttitle=SystemName, overlay=true, pyramiding=InitPyramidMax, initial_capital = InitCapital, default_qty_type=strategy.percent_of_equity, default_qty_value=InitPosition, commission_type=strategy.commission.percent, commission_value=InitCommission, precision=6, max_lines_count=500, max_labels_count=500,use_bar_magnifier = true)
 
-passphrase 				= input.string(defval='xxxx', title ='SECRET_KEY', group='═ Bot Setting ═' )
-leveragex  				= input.int(25,title='leverage', group='═ Bot Setting ═', minval=1)
-ticker                 = input.string(defval='BTCUSDTPERP', group='═ Bot Setting ═')
+passphrase = input.string(defval='xxxx', title ='SECRET_KEY', group='═ Bot Setting ═' )
+leveragex  = input.int(25,title='leverage', group='═ Bot Setting ═', minval=1)
+ticker = input.string(defval='BTCUSDTPERP', group='═ Bot Setting ═')
 
 //payload
-Alert_OpenLong      	= '{"side": "OpenLong", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
-Alert_OpenShort     	= '{"side": "OpenShort", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
-Alert_LongTP        	= '{"side": "CloseLong", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
-Alert_ShortTP       	= '{"side": "CloseShort", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
-Alert_Stoplong   		= '{"side": "CloseLong", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
-Alert_Stopshort  		= '{"side": "CloseShort", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
+Alert_OpenLong  = '{"side": "OpenLong", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
+Alert_OpenShort = '{"side": "OpenShort", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
+Alert_LongTP = '{"side": "CloseLong", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
+Alert_ShortTP = '{"side": "CloseShort", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
+Alert_Stoplong = '{"side": "CloseLong", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
+Alert_Stopshort = '{"side": "CloseShort", "amount": "@{{strategy.order.contracts}}", "symbol": "'+ticker+'", "passphrase": "'+passphrase+'","leverage":"'+str.tostring(leveragex)+'"}'
 
 CloseSession = input.bool(false, title='📅トレード時間を設定', group='Session')
 Session = input.session(title='トレードセッション', defval='0000-2345', group='Session')
